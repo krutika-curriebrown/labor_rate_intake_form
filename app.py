@@ -7,9 +7,9 @@ from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas as pdf_canvas
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
-DATABRICKS_TOKEN = 'dapi2d1bfa01955d210cbacd7a3ea6251cb8-3'
-SERVER_HOSTNAME  = 'adb-4835006895446257.17.azuredatabricks.net'
-HTTP_PATH        = '/sql/1.0/warehouses/2256e5e639791174'
+DATABRICKS_TOKEN = os.getenv('passkey')
+SERVER_HOSTNAME  = os.getenv('server_hostname')
+HTTP_PATH        = os.getenv('http_path')
 TABLE_NAME       = "hive_metastore.labor_rates.unified_labor_rates"
 
 if not (DATABRICKS_TOKEN and SERVER_HOSTNAME and HTTP_PATH):
@@ -275,7 +275,7 @@ if not st.session_state["session_started"]:
     </div>""", unsafe_allow_html=True)
     _, col, _ = st.columns([1,2,1])
     with col:
-        name_input = st.text_input("Full Name", placeholder="e.g. Ruby Johnson", label_visibility="collapsed")
+        name_input = st.text_input("Full Name", placeholder="e.g. Rachel Personius", label_visibility="collapsed")
         if st.button("Start Session", use_container_width=True):
             if not name_input.strip():
                 st.error("Please enter your full name to continue.")
@@ -393,27 +393,38 @@ base      = c3.number_input("Base ●", value=0.0, step=0.01, format="%.2f")
 # ── 06 BURDEN CHIPS ───────────────────────────────────────────────────────────
 st.markdown('<div class="sec-label">06 · Optional Burden — click to expand / collapse</div>', unsafe_allow_html=True)
 
-# grp_open: dict of grp -> True (open) / False (collapsed). Persists across reruns.
-# burden values stored directly in st.session_state with key "bv_{col_key}" so
-# Streamlit owns the widget state — values are NEVER cleared on collapse.
+# ── BURDEN STATE SETUP ────────────────────────────────────────────────────────
+# We use TWO keys per burden column:
+#   "bv_{col_key}"        → persisted value (never wiped on collapse)
+#   "bvw_{col_key}"       → widget key (only exists when group is open)
+# On every change, on_change copies widget value → persisted value.
+# On collapse, widget disappears but persisted value remains untouched.
+
 if "grp_open" not in st.session_state:
     st.session_state["grp_open"] = {}
 
 visible_groups = {g: cols for g, cols in BURDEN_GROUPS.items()
                   if not (g in USA_ONLY_GROUPS and not is_usa)}
 
-# Ensure all burden value keys exist in session state
+# Ensure persisted keys exist
 for grp, col_pairs in visible_groups.items():
     for col_key, _ in col_pairs:
         if f"bv_{col_key}" not in st.session_state:
             st.session_state[f"bv_{col_key}"] = 0.0
+
+def save_burden(col_key):
+    """Copy widget value into persisted key."""
+    st.session_state[f"bv_{col_key}"] = st.session_state.get(f"bvw_{col_key}", 0.0)
+
+def get_burden(col_key):
+    return st.session_state.get(f"bv_{col_key}", 0.0)
 
 # Chip row
 chip_cols = st.columns(len(visible_groups))
 for i, grp in enumerate(visible_groups):
     col_pairs = visible_groups[grp]
     is_open   = st.session_state["grp_open"].get(grp, False)
-    has_data  = any(st.session_state.get(f"bv_{k}", 0.0) != 0.0 for k, _ in col_pairs)
+    has_data  = any(get_burden(k) != 0.0 for k, _ in col_pairs)
     if is_open:
         label = f"▲  {grp}"
     elif has_data:
@@ -421,26 +432,32 @@ for i, grp in enumerate(visible_groups):
     else:
         label = f"+  {grp}"
     if chip_cols[i].button(label, key=f"chip_{grp}"):
+        # Before collapsing, flush widget values → persisted values
+        if is_open:
+            for col_key, _ in col_pairs:
+                if f"bvw_{col_key}" in st.session_state:
+                    st.session_state[f"bv_{col_key}"] = st.session_state[f"bvw_{col_key}"]
         st.session_state["grp_open"][grp] = not is_open
         st.rerun()
 
-# Render expanded groups — number_input uses "bv_{col_key}" as key
-# so Streamlit preserves the value even when the widget is hidden
+# Render expanded groups
 for grp, col_pairs in visible_groups.items():
     if not st.session_state["grp_open"].get(grp, False):
         continue
     st.markdown(f'<div class="group-lbl">— {grp}</div>', unsafe_allow_html=True)
     gcols = st.columns(len(col_pairs))
     for j, (col_key, col_label) in enumerate(col_pairs):
+        # Seed widget from persisted value
+        if f"bvw_{col_key}" not in st.session_state:
+            st.session_state[f"bvw_{col_key}"] = get_burden(col_key)
         gcols[j].number_input(
             col_label, step=0.01, format="%.2f",
-            key=f"bv_{col_key}",
+            key=f"bvw_{col_key}",
+            on_change=save_burden, args=(col_key,),
             help="Negative values are valid"
         )
-
-# Read all burden values from session state for bill rate and submission
-def get_burden(col_key):
-    return st.session_state.get(f"bv_{col_key}", 0.0)
+        # Keep persisted in sync on every render
+        st.session_state[f"bv_{col_key}"] = st.session_state.get(f"bvw_{col_key}", get_burden(col_key))
 
 bill_rate = base + sum(get_burden(k) for k in ALL_BURDEN_KEYS)
 st.markdown(f"""
@@ -552,7 +569,8 @@ if submit:
             st.session_state["receipts"].append({**row, "Timestamp": ts, "Proof Hash": proof})
             # Reset burden state for next entry
             for k in ALL_BURDEN_KEYS:
-                st.session_state[f"bv_{k}"] = 0.0
+                st.session_state[f"bv_{k}"]  = 0.0
+                st.session_state.pop(f"bvw_{k}", None)
             st.session_state["grp_open"]    = {}
             st.session_state["confirm_dup"] = False
             st.session_state["pending_row"] = None
@@ -568,7 +586,8 @@ if st.session_state["confirm_dup"]:
             st.markdown(f"**Timestamp:** `{ts}`  \n**Proof hash:** `{proof}`")
             st.session_state["receipts"].append({**row, "Timestamp": ts, "Proof Hash": proof})
             for k in ALL_BURDEN_KEYS:
-                st.session_state[f"bv_{k}"] = 0.0
+                st.session_state[f"bv_{k}"]  = 0.0
+                st.session_state.pop(f"bvw_{k}", None)
             st.session_state["grp_open"]    = {}
             st.session_state["confirm_dup"] = False
             st.session_state["pending_row"] = None
