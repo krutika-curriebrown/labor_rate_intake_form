@@ -250,6 +250,7 @@ defaults = {
     "session_started":  False,
     "confirm_dup":      False,
     "pending_row":      None,
+    "form_key":         0,
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -307,7 +308,7 @@ with st.sidebar:
         st.cache_data.clear(); st.cache_resource.clear(); st.rerun()
 
 # ── MODE TOGGLE ───────────────────────────────────────────────────────────────
-is_usa = st.toggle("USA DATA", value=True)
+is_usa = st.toggle("USA DATA", value=True, key=f"usa_toggle_{st.session_state['form_key']}")
 if is_usa:
     st.markdown('<div class="mode-banner mode-usa">⬤ &nbsp;USA Mode — Country / Region / Currency locked to defaults</div>', unsafe_allow_html=True)
 else:
@@ -316,48 +317,48 @@ else:
 # ── 01 CLASSIFICATION ─────────────────────────────────────────────────────────
 st.markdown('<div class="sec-label">01 · Classification</div>', unsafe_allow_html=True)
 c1, c2, c3 = st.columns(3)
-position     = c1.selectbox("Position ●", [""] + POSITION_VALUES)
-labor_type   = c2.selectbox("Labor Type ●", [""] + LABOR_TYPE_VALUES)
+position     = c1.selectbox("Position ●", [""] + POSITION_VALUES, key=f"pos_{st.session_state['form_key']}")
+labor_type   = c2.selectbox("Labor Type ●", [""] + LABOR_TYPE_VALUES, key=f"lt_{st.session_state['form_key']}")
 # Worker classification: shown and mandatory for USA only. Hidden and NULL for international.
 if is_usa:
-    worker_class = c3.selectbox("Worker Classification ●", [""] + WORKER_CLASS_VALUES)
+    worker_class = c3.selectbox("Worker Classification ●", [""] + WORKER_CLASS_VALUES, key=f"wc_{st.session_state['form_key']}")
 else:
     worker_class = None  # stored as NULL in Databricks, not shown to user
 
 c1, c2, c3 = st.columns(3)
 trade_tier = seniority_level = None
 if labor_type == "TRADE":
-    trade_tier      = c1.selectbox("Trade Tier ●", [""] + TRADE_TIER_VALUES)
+    trade_tier      = c1.selectbox("Trade Tier ●", [""] + TRADE_TIER_VALUES, key=f"tt_{st.session_state['form_key']}")
 elif labor_type == "SUPERVISION":
-    seniority_level = c1.selectbox("Seniority Level ●", [""] + SENIORITY_VALUES)
+    seniority_level = c1.selectbox("Seniority Level ●", [""] + SENIORITY_VALUES, key=f"sl_{st.session_state['form_key']}")
 else:
     c1.selectbox("Trade Tier / Seniority Level ●", ["— select Labor Type first —"], disabled=True)
 
 # Field: dropdown suggestion + free text fallback
-field_select = c2.selectbox("Field (select or type below)", [""] + FIELD_SUGGESTIONS)
-field_custom = c2.text_input("Field (custom)", placeholder="Or type your own...", label_visibility="collapsed")
+field_select = c2.selectbox("Field (select or type below)", [""] + FIELD_SUGGESTIONS, key=f"fs_{st.session_state['form_key']}")
+field_custom = c2.text_input("Field (custom)", placeholder="Or type your own...", label_visibility="collapsed", key=f"fc_{st.session_state['form_key']}")
 field = field_custom.strip().upper() if field_custom.strip() else field_select
 
-wage_type = c3.selectbox("Wage Type ●", [""] + WAGE_TYPE_VALUES)
+wage_type = c3.selectbox("Wage Type ●", [""] + WAGE_TYPE_VALUES, key=f"wt_{st.session_state['form_key']}")
 
 # ── 02 PROJECT DETAILS ────────────────────────────────────────────────────────
 st.markdown('<div class="sec-label">02 · Project Details</div>', unsafe_allow_html=True)
 c1, c2, c3 = st.columns(3)
-contractor      = c1.text_input("Contractor")
-contractor_type = c2.selectbox("Contractor Type ●", [""] + CONTRACTOR_TYPE_VALUES)
-owner           = c3.text_input("Owner")
+contractor      = c1.text_input("Contractor", key=f"con_{st.session_state['form_key']}")
+contractor_type = c2.selectbox("Contractor Type ●", [""] + CONTRACTOR_TYPE_VALUES, key=f"ct_{st.session_state['form_key']}")
+owner           = c3.text_input("Owner", key=f"own_{st.session_state['form_key']}")
 
 c1, c2, c3 = st.columns(3)
-building_type = c1.selectbox("Building Type ●", [""] + BUILDING_TYPE_VALUES)
-confirmed     = c2.selectbox("Confirmed ●", [""] + CONFIRMED_VALUES)
-union_number  = c3.text_input("Union Number") if is_usa else None
+building_type = c1.selectbox("Building Type ●", [""] + BUILDING_TYPE_VALUES, key=f"bt_{st.session_state['form_key']}")
+confirmed     = c2.selectbox("Confirmed ●", [""] + CONFIRMED_VALUES, key=f"conf_{st.session_state['form_key']}")
+union_number  = c3.text_input("Union Number", key=f"un_{st.session_state['form_key']}") if is_usa else None
 
 # ── 03 GEOGRAPHY ──────────────────────────────────────────────────────────────
 st.markdown('<div class="sec-label">03 · Geography</div>', unsafe_allow_html=True)
 if is_usa:
     c1, c2, c3 = st.columns(3)
-    city  = c1.text_input("City ●")
-    state = c2.selectbox("State ●", [""] + US_STATES)
+    city  = c1.text_input("City ●", key=f"city_{st.session_state['form_key']}")
+    state = c2.selectbox("State ●", [""] + US_STATES, key=f"state_{st.session_state['form_key']}")
     c3.text_input("Country", value="USA", disabled=True)
     country = "USA"
     c1, c2, _ = st.columns(3)
@@ -368,27 +369,27 @@ if is_usa:
     worker_origin = None
 else:
     c1, c2, c3 = st.columns(3)
-    city    = c1.text_input("City ●")
-    state   = c2.text_input("State")
-    country = c3.text_input("Country ●")
+    city    = c1.text_input("City ●", key=f"city_{st.session_state['form_key']}")
+    state   = c2.text_input("State", key=f"statei_{st.session_state['form_key']}")
+    country = c3.text_input("Country ●", key=f"cntry_{st.session_state['form_key']}")
     c1, c2, c3 = st.columns(3)
-    region        = c1.selectbox("Region ●", [""] + REGION_VALUES)
-    currency      = c2.text_input("Currency ●")
-    worker_origin = c3.selectbox("Worker Origin ●", [""] + WORKER_ORIGIN_VALUES)
+    region        = c1.selectbox("Region ●", [""] + REGION_VALUES, key=f"reg_{st.session_state['form_key']}")
+    currency      = c2.text_input("Currency ●", key=f"cur_{st.session_state['form_key']}")
+    worker_origin = c3.selectbox("Worker Origin ●", [""] + WORKER_ORIGIN_VALUES, key=f"wo_{st.session_state['form_key']}")
 
 # ── 04 DATES ─────────────────────────────────────────────────────────────────
 st.markdown('<div class="sec-label">04 · Dates</div>', unsafe_allow_html=True)
 c1, c2, c3 = st.columns(3)
-date_val   = c1.date_input("Date ●", value=None)
-start_date = c2.date_input("Start Date", value=None)
-end_date   = c3.date_input("End Date", value=None)
+date_val   = c1.date_input("Date ●", value=None, key=f"dv_{st.session_state['form_key']}")
+start_date = c2.date_input("Start Date", value=None, key=f"sd_{st.session_state['form_key']}")
+end_date   = c3.date_input("End Date", value=None, key=f"ed_{st.session_state['form_key']}")
 
 # ── 05 RATES ─────────────────────────────────────────────────────────────────
 st.markdown('<div class="sec-label">05 · Rates &amp; Burden</div>', unsafe_allow_html=True)
 c1, c2, c3 = st.columns(3)
-time_val  = c1.selectbox("Time ●", [""] + TIME_VALUES)
-work_week = c2.selectbox("Work Week", [None] + WORK_WEEK_VALUES, format_func=lambda x: "" if x is None else str(x))
-base      = c3.number_input("Base ●", value=0.0, step=0.01, format="%.2f")
+time_val  = c1.selectbox("Time ●", [""] + TIME_VALUES, key=f"tv_{st.session_state['form_key']}")
+work_week = c2.selectbox("Work Week", [None] + WORK_WEEK_VALUES, format_func=lambda x: "" if x is None else str(x), key=f"ww_{st.session_state['form_key']}")
+base      = c3.number_input("Base ●", value=0.0, step=0.01, format="%.2f", key=f"base_{st.session_state['form_key']}")
 
 # ── 06 BURDEN CHIPS ───────────────────────────────────────────────────────────
 st.markdown('<div class="sec-label">06 · Optional Burden — click to expand / collapse</div>', unsafe_allow_html=True)
@@ -468,7 +469,7 @@ st.markdown(f"""
 
 # ── 07 NOTE ───────────────────────────────────────────────────────────────────
 st.markdown('<div class="sec-label">07 · Note</div>', unsafe_allow_html=True)
-note = st.text_area("Note", height=80, placeholder="Any additional context...", label_visibility="collapsed")
+note = st.text_area("Note", height=80, placeholder="Any additional context...", label_visibility="collapsed", key=f"note_{st.session_state['form_key']}")
 
 # ── VALIDATE ─────────────────────────────────────────────────────────────────
 def validate():
@@ -504,13 +505,13 @@ def build_row():
         "SENIORITY_LEVEL":       seniority_level or None,
         "WORKER_ORIGIN":         worker_origin if not is_usa else None,
         "WORKER_CLASSIFICATION": worker_class or None,
-        "FIELD":                 field or None,
+        "FIELD":                 field.strip().upper() if field and field.strip() else None,
         "TIME":                  time_val,
         "WORK_WEEK":             work_week,
-        "CONTRACTOR":            contractor or None,
+        "CONTRACTOR":            contractor.strip().upper() if contractor.strip() else None,
         "CONTRACTOR_TYPE":       contractor_type,
-        "OWNER":                 owner or None,
-        "UNION_NUMBER":          union_number if is_usa else None,
+        "OWNER":                 owner.strip().upper() if owner.strip() else None,
+        "UNION_NUMBER":          union_number.strip().upper() if is_usa and union_number and union_number.strip() else None,
         "WAGE_TYPE":             wage_type,
         "BUILDING_TYPE":         building_type,
         "CITY":                  city.strip().upper(),
@@ -536,7 +537,7 @@ def build_row():
         "OTHER_BURDEN": n(round(get_burden("OTHER_BURDEN"), 2)),
         "G_AND_A_OH":   n(round(get_burden("G_AND_A_OH"),   2)),
         "PROFIT":       n(round(get_burden("PROFIT"),       2)),
-        "NOTE":         note or None,
+        "NOTE":         note.strip().upper() if note and note.strip() else None,
         "CONFIRMED":    confirmed,
     }
 
@@ -566,7 +567,7 @@ if submit:
                 proof, ts = insert_row(row)
             st.success("✓  Entry submitted successfully")
             st.markdown(f"**Timestamp:** `{ts}`  \n**Proof hash:** `{proof}`")
-            st.session_state["receipts"].append({**row, "Timestamp": ts, "Proof Hash": proof})
+            st.session_state["receipts"].append(row)
             # Reset burden state for next entry
             for k in ALL_BURDEN_KEYS:
                 st.session_state[f"bv_{k}"]  = 0.0
@@ -574,6 +575,8 @@ if submit:
             st.session_state["grp_open"]    = {}
             st.session_state["confirm_dup"] = False
             st.session_state["pending_row"] = None
+            st.session_state["form_key"]   += 1
+            st.rerun()
 
 if st.session_state["confirm_dup"]:
     confirmed_dup = st.checkbox("I confirm this is not a duplicate and want to submit anyway")
@@ -584,13 +587,15 @@ if st.session_state["confirm_dup"]:
                 proof, ts = insert_row(row)
             st.success("✓  Entry submitted successfully")
             st.markdown(f"**Timestamp:** `{ts}`  \n**Proof hash:** `{proof}`")
-            st.session_state["receipts"].append({**row, "Timestamp": ts, "Proof Hash": proof})
+            st.session_state["receipts"].append(row)
             for k in ALL_BURDEN_KEYS:
                 st.session_state[f"bv_{k}"]  = 0.0
                 st.session_state.pop(f"bvw_{k}", None)
             st.session_state["grp_open"]    = {}
             st.session_state["confirm_dup"] = False
             st.session_state["pending_row"] = None
+            st.session_state["form_key"]   += 1
+            st.rerun()
 
 # ── SESSION RECEIPT ───────────────────────────────────────────────────────────
 if st.session_state["receipts"]:
