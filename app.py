@@ -515,7 +515,7 @@ def build_row():
         "WAGE_TYPE":             wage_type,
         "BUILDING_TYPE":         building_type,
         "CITY":                  city.strip().upper(),
-        "STATE":                 state if state else None,
+        "STATE":                 state.strip().upper() if state and state.strip() else None,
         "COUNTRY":               country.strip().upper(),
         "REGION":                region,
         "CURRENCY":              currency.strip().upper(),
