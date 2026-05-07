@@ -3,6 +3,7 @@ import streamlit as st
 from databricks import sql
 from datetime import datetime
 import hashlib, uuid, io
+import pandas as pd
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas as pdf_canvas
 
@@ -15,6 +16,12 @@ TABLE_NAME       = "hive_metastore.labor_rates.unified_labor_rates"
 if not (DATABRICKS_TOKEN and SERVER_HOSTNAME and HTTP_PATH):
     st.error("Missing environment variables: 'passkey', 'server_hostname', 'http_path'.")
     st.stop()
+
+# ── BULK UPLOAD ACCESS ────────────────────────────────────────────────────────
+BULK_UPLOAD_USERS = {
+    "ruby ngan ho", "rachel personius", "kai sobasaki",
+    "daniel personius", "krutika tekwani",
+}
 
 # ── SCHEMA ────────────────────────────────────────────────────────────────────
 POSITION_VALUES = sorted([
@@ -101,7 +108,6 @@ US_STATES = [
     "NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT",
     "VA","WA","WV","WI","WY","DC","PR","GU","VI",
 ]
-
 BURDEN_GROUPS = {
     "TAXES":      [("FICA","FICA"),("FUTA","FUTA"),("SUTA","SUTA")],
     "INSURANCE":  [("WORK_COMP","WORK COMP"),("LIABILITY_INS","LIABILITY INS"),("TAX_INS","TAX / INS")],
@@ -109,11 +115,35 @@ BURDEN_GROUPS = {
     "OVERHEAD":   [("OT","OT"),("OTHER_BURDEN","OTHER BURDEN"),("G_AND_A_OH","G&A (OH)"),("PROFIT","PROFIT")],
 }
 USA_ONLY_GROUPS = {"TAXES"}
-ALL_BURDEN_KEYS = [k for grp in BURDEN_GROUPS.values() for k,_ in grp]
+ALL_BURDEN_KEYS = [k for grp in BURDEN_GROUPS.values() for k, _ in grp]
 
-# ── DB ────────────────────────────────────────────────────────────────────────
+# Mandatory columns for bulk validation
+MANDATORY_BASE = [
+    "POSITION","LABOR_TYPE","WAGE_TYPE","CONTRACTOR_TYPE",
+    "BUILDING_TYPE","CONFIRMED","CITY","DATE","TIME","BASE",
+]
+VALID_VALUES = {
+    "POSITION":              set(POSITION_VALUES),
+    "LABOR_TYPE":            {"TRADE","SUPERVISION"},
+    "TRADE_TIER":            set(TRADE_TIER_VALUES),
+    "SENIORITY_LEVEL":       set(SENIORITY_VALUES),
+    "WORKER_ORIGIN":         {"LOCAL","INTERNATIONAL","TRAVELER"},
+    "WORKER_CLASSIFICATION": {"UNION","OPEN SHOP","GC PM","OWNER PM","UNKNOWN"},
+    "WAGE_TYPE":             set(WAGE_TYPE_VALUES),
+    "CONTRACTOR_TYPE":       {"GC/CM","SUB","OWNER TEAM"},
+    "BUILDING_TYPE":         set(BUILDING_TYPE_VALUES),
+    "CONFIRMED":             {"BID","RESEARCHED"},
+    "REGION":                set(REGION_VALUES),
+    "TIME":                  {"ST","OT","DT"},
+}
+
+# ── DB HELPERS ────────────────────────────────────────────────────────────────
 def get_conn():
-    return sql.connect(server_hostname=SERVER_HOSTNAME, http_path=HTTP_PATH, access_token=DATABRICKS_TOKEN)
+    return sql.connect(
+        server_hostname=SERVER_HOSTNAME,
+        http_path=HTTP_PATH,
+        access_token=DATABRICKS_TOKEN,
+    )
 
 @st.cache_resource
 def init_table():
@@ -137,7 +167,6 @@ def init_table():
 init_table()
 
 def check_duplicate(row: dict) -> bool:
-    """Check if a record with same key fields already exists (excluding NOTE, FIELD, metadata)."""
     exclude = {"NOTE","FIELD","SUBMISSION_TS","HASH_ID","PROOF_HASH","SOURCE","SUBMITTED_BY"}
     conditions = []
     for k, v in row.items():
@@ -148,23 +177,22 @@ def check_duplicate(row: dict) -> bool:
             conditions.append(f"{k} = {v}")
         else:
             conditions.append(f"{k} = '{str(v).replace(chr(39), chr(39)*2)}'")
-    where = " AND ".join(conditions)
     conn = get_conn(); cur = conn.cursor()
-    cur.execute(f"SELECT COUNT(*) FROM {TABLE_NAME} WHERE {where}")
-    result = cur.fetchone()
-    cur.close()
-    return result[0] > 0 if result else False
+    cur.execute(f"SELECT COUNT(*) FROM {TABLE_NAME} WHERE {' AND '.join(conditions)}")
+    result = cur.fetchone(); cur.close()
+    return (result[0] > 0) if result else False
 
 def insert_row(data: dict):
     conn = get_conn(); cur = conn.cursor()
     ts      = datetime.utcnow().isoformat()
     hash_id = str(uuid.uuid4())
-    proof   = hashlib.sha256(("|".join(str(v) for v in data.values())+f"|{ts}").encode()).hexdigest()
+    proof   = hashlib.sha256(("|".join(str(v) for v in data.values()) + f"|{ts}").encode()).hexdigest()
     data.update({"SUBMISSION_TS": ts, "HASH_ID": hash_id, "PROOF_HASH": proof})
     cols = ", ".join(data.keys())
     vals = ", ".join(
-        "NULL" if v is None else str(v) if isinstance(v,(int,float))
-        else f"'{str(v).replace(chr(39),chr(39)*2)}'"
+        "NULL" if v is None
+        else str(v) if isinstance(v, (int, float))
+        else f"'{str(v).replace(chr(39), chr(39)*2)}'"
         for v in data.values()
     )
     cur.execute(f"INSERT INTO {TABLE_NAME} ({cols}) VALUES ({vals})")
@@ -185,25 +213,34 @@ html, body, [class*="css"] { font-family:'Lato',sans-serif; background-color:#f5
     background:#3b1f52; padding:1.4rem 2rem; margin:-1rem -1rem 1.5rem -1rem;
     display:flex; align-items:center; justify-content:space-between;
 }
-.cb-header-left h1 { font-family:'Merriweather',serif; font-size:1.3rem; font-weight:700; color:#e3dedb; margin:0; letter-spacing:.02em; }
+.cb-header-left h1 { font-family:'Merriweather',serif; font-size:1.3rem; font-weight:700; color:#e3dedb; margin:0; }
 .cb-header-left p  { font-size:.72rem; color:#b8a8c8; margin:.2rem 0 0; letter-spacing:.06em; text-transform:uppercase; }
-.cb-logo { font-family:'Merriweather',serif; font-size:1rem; font-weight:700; color:#e3dedb; opacity:.4; letter-spacing:.08em; }
+.cb-logo           { font-family:'Merriweather',serif; font-size:1rem; font-weight:700; color:#e3dedb; opacity:.4; letter-spacing:.08em; }
 
-.gate-wrap { max-width:460px; margin:4rem auto; text-align:center; }
+.gate-wrap    { max-width:460px; margin:4rem auto; text-align:center; }
 .gate-wrap h2 { font-family:'Merriweather',serif; color:#3b1f52; font-size:1.4rem; margin-bottom:.4rem; }
 .gate-wrap p  { color:#7a6a80; font-size:.85rem; margin-bottom:2rem; }
 
-.mode-banner { padding:.55rem 1rem; border-radius:3px; margin:0 0 1.5rem; font-size:.75rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
-.mode-usa  { background:#edf4ee; border:1px solid #5a9e6f; color:#2d6e44; }
-.mode-intl { background:#f0ecf5; border:1px solid #3b1f52; color:#3b1f52; }
+.mode-banner  { padding:.55rem 1rem; border-radius:3px; margin:0 0 1.5rem; font-size:.75rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
+.mode-usa     { background:#edf4ee; border:1px solid #5a9e6f; color:#2d6e44; }
+.mode-intl    { background:#f0ecf5; border:1px solid #3b1f52; color:#3b1f52; }
+.mode-bulk    { background:#1a0f2e; border:1px solid #3b1f52; color:#c084fc; }
 
 .sec-label { font-size:.65rem; font-weight:700; color:#3b1f52; letter-spacing:.18em; text-transform:uppercase; border-left:3px solid #3b1f52; padding-left:.55rem; margin:1.8rem 0 .9rem; }
 
-.bill-box { background:#3b1f52; border-radius:4px; padding:1rem 1.5rem; margin:1rem 0; display:flex; align-items:baseline; gap:1rem; }
+.bill-box   { background:#3b1f52; border-radius:4px; padding:1rem 1.5rem; margin:1rem 0; display:flex; align-items:baseline; gap:1rem; }
 .bill-label { font-size:.68rem; font-weight:700; color:#b8a8c8; letter-spacing:.12em; text-transform:uppercase; }
 .bill-value { font-size:2rem; font-weight:700; color:#e3dedb; font-family:'Merriweather',serif; }
 
 .group-lbl { font-size:.62rem; font-weight:700; color:#7a5a9a; letter-spacing:.14em; text-transform:uppercase; margin:.6rem 0 .25rem; }
+
+.bulk-row-valid   { background:#ffffff; border:1px solid #d4cdd9; border-radius:3px; padding:.35rem .7rem; font-size:.78rem; font-family:monospace; color:#2c2c2c; margin-bottom:2px; }
+.bulk-row-invalid { background:#fef2f2; border:1px solid #e57373; border-radius:3px; padding:.35rem .7rem; font-size:.78rem; font-family:monospace; color:#2c2c2c; margin-bottom:2px; }
+.bulk-tag-usa     { background:#edf4ee; color:#2d6e44; font-weight:700; padding:1px 6px; border-radius:2px; font-size:.68rem; margin-right:.5rem; }
+.bulk-tag-intl    { background:#f0ecf5; color:#3b1f52; font-weight:700; padding:1px 6px; border-radius:2px; font-size:.68rem; margin-right:.5rem; }
+.bulk-err         { color:#b91c1c; font-size:.72rem; }
+.bulk-count-ok    { background:#edf4ee; border:1px solid #5a9e6f; border-radius:3px; padding:.5rem 1rem; font-size:.8rem; font-weight:700; color:#2d6e44; display:inline-block; margin-right:.5rem; }
+.bulk-count-err   { background:#fef2f2; border:1px solid #e57373; border-radius:3px; padding:.5rem 1rem; font-size:.8rem; font-weight:700; color:#b91c1c; display:inline-block; }
 
 div[data-testid="stSelectbox"] > div > div,
 div[data-testid="stTextInput"] > div > div > input,
@@ -220,7 +257,6 @@ div[data-testid="stTextInput"] > div > div > input:disabled {
 }
 label { color:#5a4a6a !important; font-size:.72rem !important; font-weight:700 !important; letter-spacing:.05em !important; text-transform:uppercase !important; }
 
-/* Chip buttons - pill style */
 .stButton > button {
     background:#ffffff !important; border:1px solid #c9bdd6 !important; color:#3b1f52 !important;
     font-family:'Lato',sans-serif !important; font-size:.75rem !important; font-weight:700 !important;
@@ -231,7 +267,8 @@ label { color:#5a4a6a !important; font-size:.72rem !important; font-weight:700 !
 section[data-testid="stSidebar"] { background:#3b1f52 !important; border-right:none !important; }
 section[data-testid="stSidebar"] * { color:#e3dedb !important; }
 section[data-testid="stSidebar"] .stButton > button {
-    background:rgba(255,255,255,.1) !important; border:1px solid rgba(255,255,255,.2) !important; color:#e3dedb !important; border-radius:20px !important;
+    background:rgba(255,255,255,.1) !important; border:1px solid rgba(255,255,255,.2) !important;
+    color:#e3dedb !important; border-radius:20px !important;
 }
 section[data-testid="stSidebar"] .stButton > button:hover { background:rgba(255,255,255,.2) !important; }
 section[data-testid="stSidebar"] hr { border-color:rgba(255,255,255,.15) !important; }
@@ -241,22 +278,22 @@ hr { border-color:#ddd5e5 !important; }
 
 # ── SESSION STATE ─────────────────────────────────────────────────────────────
 defaults = {
-    "session_id":       str(uuid.uuid4()),
-    "receipts":         [],
-    "collapsed_groups": set(),   # groups that are collapsed but have data
-    "burden_data":      {},      # persisted burden values: col_key -> float
-    "active_groups":    set(),   # groups user has opened at least once
-    "user_name":        None,
-    "session_started":  False,
-    "confirm_dup":      False,
-    "pending_row":      None,
-    "form_key":         0,
+    "session_id":      str(uuid.uuid4()),
+    "receipts":        [],
+    "user_name":       None,
+    "session_started": False,
+    "confirm_dup":     False,
+    "pending_row":     None,
+    "form_key":        0,
+    "bulk_mode":       False,
+    "grp_open":        {},
+    "bulk_selected":   [],
 }
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# ── HEADER (always) ───────────────────────────────────────────────────────────
+# ── HEADER ────────────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="cb-header">
   <div class="cb-header-left">
@@ -266,7 +303,7 @@ st.markdown("""
   <div class="cb-logo">CBI</div>
 </div>""", unsafe_allow_html=True)
 
-# ── GATE ─────────────────────────────────────────────────────────────────────
+# ── GATE: NAME ENTRY ──────────────────────────────────────────────────────────
 if not st.session_state["session_started"]:
     st.markdown("""
     <div class="gate-wrap">
@@ -274,9 +311,9 @@ if not st.session_state["session_started"]:
       <p>Enter your full name to begin your session.<br>
       Your name will be recorded with every entry you submit.</p>
     </div>""", unsafe_allow_html=True)
-    _, col, _ = st.columns([1,2,1])
+    _, col, _ = st.columns([1, 2, 1])
     with col:
-        name_input = st.text_input("Full Name", placeholder="e.g. Rachel Personius", label_visibility="collapsed")
+        name_input = st.text_input("Full Name", placeholder="e.g. Ruby Ngan Ho", label_visibility="collapsed")
         if st.button("Start Session", use_container_width=True):
             if not name_input.strip():
                 st.error("Please enter your full name to continue.")
@@ -289,13 +326,16 @@ if not st.session_state["session_started"]:
 # ── SIDEBAR ───────────────────────────────────────────────────────────────────
 user_name    = st.session_state["user_name"]
 session_date = datetime.now().strftime("%b %d, %Y")
+is_bulk_user = user_name.lower().strip() in BULK_UPLOAD_USERS
+
 with st.sidebar:
     st.markdown(f"### {user_name}")
     st.caption(session_date)
     st.markdown("---")
     st.markdown(f"**{len(st.session_state['receipts'])} submission(s) this session**")
     st.markdown("---")
-    st.markdown("""
+    if not st.session_state["bulk_mode"]:
+        st.markdown("""
 **Fields marked ● are required.**
 
 - Toggle USA / International at the top
@@ -304,136 +344,412 @@ with st.sidebar:
 - Bill Rate updates automatically
 - Download session receipt below
 """)
+    else:
+        st.markdown("""
+**Bulk Upload Mode**
+
+- Upload your completed Excel template
+- Valid rows shown in white, errors in red
+- Select rows to submit using checkboxes
+- Download session receipt after submitting
+""")
     if st.button("Refresh cache"):
         st.cache_data.clear(); st.cache_resource.clear(); st.rerun()
 
-# ── MODE TOGGLE ───────────────────────────────────────────────────────────────
-is_usa = st.toggle("USA DATA", value=True, key=f"usa_toggle_{st.session_state['form_key']}")
-if is_usa:
+# ── MODE TOGGLES ──────────────────────────────────────────────────────────────
+toggle_cols = st.columns([2, 2, 6]) if is_bulk_user else st.columns([2, 8])
+
+with toggle_cols[0]:
+    is_usa = st.toggle(
+        "USA DATA", value=True,
+        key=f"usa_toggle_{st.session_state['form_key']}",
+        disabled=st.session_state["bulk_mode"],
+    )
+
+if is_bulk_user:
+    with toggle_cols[1]:
+        bulk_mode = st.toggle("BULK UPLOAD", value=st.session_state["bulk_mode"], key="bulk_toggle")
+        if bulk_mode != st.session_state["bulk_mode"]:
+            st.session_state["bulk_mode"] = bulk_mode
+            st.rerun()
+else:
+    bulk_mode = False
+
+# ── MODE BANNER ───────────────────────────────────────────────────────────────
+if bulk_mode:
+    st.markdown('<div class="mode-banner mode-bulk">⬤ &nbsp;Bulk Upload Mode — upload your completed Excel template</div>', unsafe_allow_html=True)
+elif is_usa:
     st.markdown('<div class="mode-banner mode-usa">⬤ &nbsp;USA Mode — Country / Region / Currency locked to defaults</div>', unsafe_allow_html=True)
 else:
     st.markdown('<div class="mode-banner mode-intl">⬤ &nbsp;International Mode — fill all geography fields</div>', unsafe_allow_html=True)
 
+# ══════════════════════════════════════════════════════════════════════════════
+# BULK UPLOAD MODE
+# ══════════════════════════════════════════════════════════════════════════════
+if bulk_mode:
+
+    uploaded = st.file_uploader(
+        "Upload completed template (.xlsx)",
+        type=["xlsx"],
+        label_visibility="collapsed",
+    )
+
+    if not uploaded:
+        st.info("Upload your completed Labor Rate Bulk Upload Template to get started.")
+        st.stop()
+
+    # ── Read sheets ───────────────────────────────────────────────────────────
+    try:
+        sheets = pd.read_excel(uploaded, sheet_name=None, header=None)
+    except Exception as e:
+        st.error(f"Could not read file: {e}")
+        st.stop()
+
+    usa_sheet  = next((s for s in sheets if "USA" in s.upper() and "INTERNATIONAL" not in s.upper()), None)
+    intl_sheet = next((s for s in sheets if "INTERNATIONAL" in s.upper()), None)
+
+    if not usa_sheet and not intl_sheet:
+        st.error("Could not find USA DATA ENTRY or INTERNATIONAL DATA ENTRY sheets. Please use the correct template.")
+        st.stop()
+
+    def parse_sheet(raw_df, source_label):
+        """
+        Template has row 0 = type labels (MANDATORY/OPTIONAL/LOCKED/AUTO-SUM)
+                        row 1 = column headers
+                        row 2+ = data
+        """
+        if raw_df.shape[0] < 3:
+            return pd.DataFrame()
+        headers = [str(v).replace(" *", "").strip() if pd.notna(v) else f"COL_{i}"
+                   for i, v in enumerate(raw_df.iloc[1])]
+        df = raw_df.iloc[2:].copy()
+        df.columns = headers
+        # Drop BILL_RATE (auto-computed) and any unnamed cols
+        df = df.drop(columns=[c for c in df.columns if "BILL_RATE" in c or "Unnamed" in c or "COL_" in c], errors="ignore")
+        # Uppercase all string values
+        for col in df.columns:
+            df[col] = df[col].apply(
+                lambda v: str(v).strip().upper()
+                if pd.notna(v) and str(v).strip().upper() not in ("NAN","NONE","") else None
+            )
+        df["_source"] = source_label
+        # Drop rows where both POSITION and BASE are empty
+        df = df[~df.apply(
+            lambda r: str(r.get("POSITION","")).strip() in ("","NONE","NAN") and
+                      str(r.get("BASE","")).strip() in ("","NONE","NAN","0.0","0"),
+            axis=1
+        )].reset_index(drop=True)
+        return df
+
+    frames = []
+    if usa_sheet:
+        df_usa_bulk = parse_sheet(sheets[usa_sheet], "USA")
+        if not df_usa_bulk.empty:
+            frames.append(df_usa_bulk)
+    if intl_sheet:
+        df_intl_bulk = parse_sheet(sheets[intl_sheet], "INTERNATIONAL")
+        if not df_intl_bulk.empty:
+            frames.append(df_intl_bulk)
+
+    if not frames:
+        st.warning("No data rows found in the uploaded file.")
+        st.stop()
+
+    df = pd.concat(frames, ignore_index=True)
+
+    # ── Validate each row ─────────────────────────────────────────────────────
+    def validate_bulk_row(row):
+        errors = []
+        src = row.get("_source", "USA")
+
+        # Mandatory fields
+        mand = list(MANDATORY_BASE)
+        if src == "USA":
+            mand += ["STATE", "WORKER_CLASSIFICATION"]
+        else:
+            mand += ["WORKER_ORIGIN", "COUNTRY", "REGION", "CURRENCY"]
+
+        for col in mand:
+            val = row.get(col)
+            if not val or str(val).strip() in ("", "NAN", "NONE"):
+                errors.append(f"{col} is required")
+
+        # Fixed schema values
+        for col, valid_set in VALID_VALUES.items():
+            val = row.get(col)
+            if val and str(val).strip() not in ("", "NAN", "NONE"):
+                if str(val).strip() not in valid_set:
+                    errors.append(f"{col}: '{val}' not a valid value")
+
+        # TRADE/SUPERVISION logic
+        lt = row.get("LABOR_TYPE", "")
+        tt = row.get("TRADE_TIER", "")
+        sl = row.get("SENIORITY_LEVEL", "")
+        if lt == "TRADE" and not tt:
+            errors.append("TRADE_TIER required when LABOR_TYPE = TRADE")
+        if lt == "SUPERVISION" and not sl:
+            errors.append("SENIORITY_LEVEL required when LABOR_TYPE = SUPERVISION")
+
+        return errors
+
+    validations = [validate_bulk_row(row) for _, row in df.iterrows()]
+    valid_count   = sum(1 for e in validations if not e)
+    invalid_count = sum(1 for e in validations if e)
+
+    # ── Summary counts ────────────────────────────────────────────────────────
+    st.markdown(f"""
+    <div style="margin:.5rem 0 1rem;display:flex;gap:.75rem;flex-wrap:wrap;">
+      <span class="bulk-count-ok">✓ {valid_count} valid row{'s' if valid_count != 1 else ''}</span>
+      <span class="bulk-count-err">✕ {invalid_count} row{'s' if invalid_count != 1 else ''} with errors</span>
+    </div>""", unsafe_allow_html=True)
+
+    # ── Selection state ───────────────────────────────────────────────────────
+    if len(st.session_state["bulk_selected"]) != len(df):
+        st.session_state["bulk_selected"] = [len(e) == 0 for e in validations]
+
+    ca, cb = st.columns([1, 1])
+    if ca.button("✓  Select all valid"):
+        st.session_state["bulk_selected"] = [len(e) == 0 for e in validations]
+        st.rerun()
+    if cb.button("✕  Deselect all"):
+        st.session_state["bulk_selected"] = [False] * len(df)
+        st.rerun()
+
+    # ── Row preview ───────────────────────────────────────────────────────────
+    st.markdown('<div class="sec-label">Preview — select rows to submit</div>', unsafe_allow_html=True)
+
+    PREVIEW_COLS = ["POSITION","LABOR_TYPE","TRADE_TIER","SENIORITY_LEVEL",
+                    "CONTRACTOR","CITY","STATE","COUNTRY","DATE","BASE","CONFIRMED"]
+
+    for i, (_, row) in enumerate(df.iterrows()):
+        errs    = validations[i]
+        src     = row.get("_source", "USA")
+        is_valid = len(errs) == 0
+
+        col_chk, col_row, col_err = st.columns([0.4, 7, 2.5])
+
+        with col_chk:
+            checked = st.checkbox(
+                "", value=st.session_state["bulk_selected"][i],
+                key=f"bulk_chk_{i}", disabled=not is_valid,
+            )
+            st.session_state["bulk_selected"][i] = checked and is_valid
+
+        with col_row:
+            tag_class = "bulk-tag-usa" if src == "USA" else "bulk-tag-intl"
+            row_class = "bulk-row-valid" if is_valid else "bulk-row-invalid"
+            preview = " · ".join(
+                f"{c}: {str(row.get(c,''))[:18]}"
+                for c in PREVIEW_COLS
+                if row.get(c) and str(row.get(c)) not in ("","NAN","NONE","None","nan")
+            )
+            st.markdown(
+                f'<div class="{row_class}">'
+                f'<span class="{tag_class}">{src}</span>{preview}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+        with col_err:
+            if errs:
+                st.markdown(
+                    f'<div class="bulk-err">{"<br>".join(errs[:2])}{"..." if len(errs) > 2 else ""}</div>',
+                    unsafe_allow_html=True,
+                )
+
+    # ── Bulk submit ───────────────────────────────────────────────────────────
+    selected_indices = [i for i, s in enumerate(st.session_state["bulk_selected"]) if s]
+    st.markdown("---")
+    st.markdown(f"**{len(selected_indices)} row(s) selected for submission**")
+
+    if st.button("Submit Selected Rows", use_container_width=True, disabled=len(selected_indices) == 0):
+        submitted = 0
+        submit_errors = []
+
+        for i in selected_indices:
+            row = df.iloc[i]
+            src = row.get("_source", "USA")
+
+            def g(col):
+                v = row.get(col)
+                return None if (not v or str(v).strip() in ("","NAN","NONE","nan")) else str(v).strip()
+
+            def gn(col):
+                v = g(col)
+                try: return float(v) if v else None
+                except: return None
+
+            burden_cols = ["BASE","FICA","FUTA","SUTA","WORK_COMP","LIABILITY_INS","TAX_INS",
+                           "FRINGE_BENEFITS","PER_DIEM","SMALL_TOOLS","OT","OTHER_BURDEN","G_AND_A_OH","PROFIT"]
+            bill = sum(gn(c) or 0.0 for c in burden_cols)
+
+            bulk_row = {
+                "SOURCE":                "BULK_UPLOAD",
+                "SUBMITTED_BY":          user_name,
+                "POSITION":              g("POSITION"),
+                "LABOR_TYPE":            g("LABOR_TYPE"),
+                "TRADE_TIER":            g("TRADE_TIER"),
+                "SENIORITY_LEVEL":       g("SENIORITY_LEVEL"),
+                "WORKER_ORIGIN":         g("WORKER_ORIGIN") if src == "INTERNATIONAL" else None,
+                "WORKER_CLASSIFICATION": g("WORKER_CLASSIFICATION") if src == "USA" else None,
+                "FIELD":                 g("FIELD"),
+                "TIME":                  g("TIME"),
+                "WORK_WEEK":             int(float(g("WORK_WEEK"))) if g("WORK_WEEK") else None,
+                "CONTRACTOR":            g("CONTRACTOR"),
+                "CONTRACTOR_TYPE":       g("CONTRACTOR_TYPE"),
+                "OWNER":                 g("OWNER"),
+                "UNION_NUMBER":          g("UNION_NUMBER") if src == "USA" else None,
+                "WAGE_TYPE":             g("WAGE_TYPE"),
+                "BUILDING_TYPE":         g("BUILDING_TYPE"),
+                "CITY":                  g("CITY"),
+                "STATE":                 g("STATE"),
+                "COUNTRY":               g("COUNTRY") if src == "INTERNATIONAL" else "USA",
+                "REGION":                g("REGION") if src == "INTERNATIONAL" else "AMERICAS",
+                "CURRENCY":              g("CURRENCY") if src == "INTERNATIONAL" else "USD",
+                "START_DATE":            g("START_DATE"),
+                "END_DATE":              g("END_DATE"),
+                "DATE":                  g("DATE"),
+                "BILL_RATE":             round(bill, 2),
+                "BASE":                  gn("BASE"),
+                "FICA":                  gn("FICA") if src == "USA" else None,
+                "FUTA":                  gn("FUTA") if src == "USA" else None,
+                "SUTA":                  gn("SUTA") if src == "USA" else None,
+                "WORK_COMP":             gn("WORK_COMP"),
+                "LIABILITY_INS":         gn("LIABILITY_INS"),
+                "TAX_INS":               gn("TAX_INS"),
+                "FRINGE_BENEFITS":       gn("FRINGE_BENEFITS"),
+                "PER_DIEM":              gn("PER_DIEM"),
+                "SMALL_TOOLS":           gn("SMALL_TOOLS"),
+                "OT":                    gn("OT"),
+                "OTHER_BURDEN":          gn("OTHER_BURDEN"),
+                "G_AND_A_OH":            gn("G_AND_A_OH"),
+                "PROFIT":                gn("PROFIT"),
+                "NOTE":                  g("NOTE"),
+                "CONFIRMED":             g("CONFIRMED"),
+            }
+
+            try:
+                insert_row(bulk_row)
+                submitted += 1
+                st.session_state["receipts"].append(bulk_row)
+            except Exception as e:
+                submit_errors.append(f"Row {i + 1}: {str(e)[:100]}")
+
+        if submitted:
+            st.success(f"✓  {submitted} row(s) submitted successfully")
+        for err in submit_errors:
+            st.error(err)
+        st.session_state["bulk_selected"] = [False] * len(df)
+
+    st.stop()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SINGLE ENTRY FORM
+# ══════════════════════════════════════════════════════════════════════════════
+
 # ── 01 CLASSIFICATION ─────────────────────────────────────────────────────────
 st.markdown('<div class="sec-label">01 · Classification</div>', unsafe_allow_html=True)
+
 c1, c2, c3 = st.columns(3)
-position     = c1.selectbox("Position ●", [""] + POSITION_VALUES, key=f"pos_{st.session_state['form_key']}")
-labor_type   = c2.selectbox("Labor Type ●", [""] + LABOR_TYPE_VALUES, key=f"lt_{st.session_state['form_key']}")
-# Worker classification: shown and mandatory for USA only. Hidden and NULL for international.
+position   = c1.selectbox("Position ●",   [""] + POSITION_VALUES,  key=f"pos_{st.session_state['form_key']}")
+labor_type = c2.selectbox("Labor Type ●", [""] + LABOR_TYPE_VALUES, key=f"lt_{st.session_state['form_key']}")
 if is_usa:
     worker_class = c3.selectbox("Worker Classification ●", [""] + WORKER_CLASS_VALUES, key=f"wc_{st.session_state['form_key']}")
 else:
-    worker_class = None  # stored as NULL in Databricks, not shown to user
+    worker_class = None
 
 c1, c2, c3 = st.columns(3)
 trade_tier = seniority_level = None
 if labor_type == "TRADE":
-    trade_tier      = c1.selectbox("Trade Tier ●", [""] + TRADE_TIER_VALUES, key=f"tt_{st.session_state['form_key']}")
+    trade_tier      = c1.selectbox("Trade Tier ●",      [""] + TRADE_TIER_VALUES, key=f"tt_{st.session_state['form_key']}")
 elif labor_type == "SUPERVISION":
-    seniority_level = c1.selectbox("Seniority Level ●", [""] + SENIORITY_VALUES, key=f"sl_{st.session_state['form_key']}")
+    seniority_level = c1.selectbox("Seniority Level ●", [""] + SENIORITY_VALUES,  key=f"sl_{st.session_state['form_key']}")
 else:
     c1.selectbox("Trade Tier / Seniority Level ●", ["— select Labor Type first —"], disabled=True)
 
-# Field: dropdown suggestion + free text fallback
-field_select = c2.selectbox("Field (select or type below)", [""] + FIELD_SUGGESTIONS, key=f"fs_{st.session_state['form_key']}")
+field_select = c2.selectbox("Field", [""] + FIELD_SUGGESTIONS, key=f"fs_{st.session_state['form_key']}")
 field_custom = c2.text_input("Field (custom)", placeholder="Or type your own...", label_visibility="collapsed", key=f"fc_{st.session_state['form_key']}")
-field = field_custom.strip().upper() if field_custom.strip() else field_select
-
-wage_type = c3.selectbox("Wage Type ●", [""] + WAGE_TYPE_VALUES, key=f"wt_{st.session_state['form_key']}")
+field        = field_custom.strip().upper() if field_custom.strip() else field_select
+wage_type    = c3.selectbox("Wage Type ●", [""] + WAGE_TYPE_VALUES, key=f"wt_{st.session_state['form_key']}")
 
 # ── 02 PROJECT DETAILS ────────────────────────────────────────────────────────
 st.markdown('<div class="sec-label">02 · Project Details</div>', unsafe_allow_html=True)
+
 c1, c2, c3 = st.columns(3)
-contractor      = c1.text_input("Contractor", key=f"con_{st.session_state['form_key']}")
-contractor_type = c2.selectbox("Contractor Type ●", [""] + CONTRACTOR_TYPE_VALUES, key=f"ct_{st.session_state['form_key']}")
-owner           = c3.text_input("Owner", key=f"own_{st.session_state['form_key']}")
+contractor      = c1.text_input("Contractor",        key=f"con_{st.session_state['form_key']}")
+contractor_type = c2.selectbox("Contractor Type ●",  [""] + CONTRACTOR_TYPE_VALUES, key=f"ct_{st.session_state['form_key']}")
+owner           = c3.text_input("Owner",             key=f"own_{st.session_state['form_key']}")
 
 c1, c2, c3 = st.columns(3)
 building_type = c1.selectbox("Building Type ●", [""] + BUILDING_TYPE_VALUES, key=f"bt_{st.session_state['form_key']}")
-confirmed     = c2.selectbox("Confirmed ●", [""] + CONFIRMED_VALUES, key=f"conf_{st.session_state['form_key']}")
-union_number  = c3.text_input("Union Number", key=f"un_{st.session_state['form_key']}") if is_usa else None
+confirmed     = c2.selectbox("Confirmed ●",     [""] + CONFIRMED_VALUES,     key=f"conf_{st.session_state['form_key']}")
+union_number  = c3.text_input("Union Number",   key=f"un_{st.session_state['form_key']}") if is_usa else None
 
 # ── 03 GEOGRAPHY ──────────────────────────────────────────────────────────────
 st.markdown('<div class="sec-label">03 · Geography</div>', unsafe_allow_html=True)
+
 if is_usa:
     c1, c2, c3 = st.columns(3)
-    city  = c1.text_input("City ●", key=f"city_{st.session_state['form_key']}")
-    state = c2.selectbox("State ●", [""] + US_STATES, key=f"state_{st.session_state['form_key']}")
-    c3.text_input("Country", value="USA", disabled=True)
+    city  = c1.text_input("City ●",  key=f"city_{st.session_state['form_key']}")
+    state = c2.selectbox("State ●",  [""] + US_STATES, key=f"state_{st.session_state['form_key']}")
+    c3.text_input("Country",  value="USA",      disabled=True)
     country = "USA"
     c1, c2, _ = st.columns(3)
-    c1.text_input("Region", value="AMERICAS", disabled=True)
+    c1.text_input("Region",   value="AMERICAS", disabled=True)
     region = "AMERICAS"
-    c2.text_input("Currency", value="USD", disabled=True)
-    currency = "USD"
+    c2.text_input("Currency", value="USD",      disabled=True)
+    currency      = "USD"
     worker_origin = None
 else:
     c1, c2, c3 = st.columns(3)
-    city    = c1.text_input("City ●", key=f"city_{st.session_state['form_key']}")
-    state   = c2.text_input("State", key=f"statei_{st.session_state['form_key']}")
+    city    = c1.text_input("City ●",    key=f"city_{st.session_state['form_key']}")
+    state   = c2.text_input("State",     key=f"statei_{st.session_state['form_key']}")
     country = c3.text_input("Country ●", key=f"cntry_{st.session_state['form_key']}")
     c1, c2, c3 = st.columns(3)
-    region        = c1.selectbox("Region ●", [""] + REGION_VALUES, key=f"reg_{st.session_state['form_key']}")
-    currency      = c2.text_input("Currency ●", key=f"cur_{st.session_state['form_key']}")
+    region        = c1.selectbox("Region ●",        [""] + REGION_VALUES,       key=f"reg_{st.session_state['form_key']}")
+    currency      = c2.text_input("Currency ●",                                 key=f"cur_{st.session_state['form_key']}")
     worker_origin = c3.selectbox("Worker Origin ●", [""] + WORKER_ORIGIN_VALUES, key=f"wo_{st.session_state['form_key']}")
 
 # ── 04 DATES ─────────────────────────────────────────────────────────────────
 st.markdown('<div class="sec-label">04 · Dates</div>', unsafe_allow_html=True)
+
 c1, c2, c3 = st.columns(3)
-date_val   = c1.date_input("Date ●", value=None, key=f"dv_{st.session_state['form_key']}")
+date_val   = c1.date_input("Date ●",     value=None, key=f"dv_{st.session_state['form_key']}")
 start_date = c2.date_input("Start Date", value=None, key=f"sd_{st.session_state['form_key']}")
-end_date   = c3.date_input("End Date", value=None, key=f"ed_{st.session_state['form_key']}")
+end_date   = c3.date_input("End Date",   value=None, key=f"ed_{st.session_state['form_key']}")
 
-# ── 05 RATES ─────────────────────────────────────────────────────────────────
+# ── 05 RATES & BURDEN ─────────────────────────────────────────────────────────
 st.markdown('<div class="sec-label">05 · Rates &amp; Burden</div>', unsafe_allow_html=True)
+
 c1, c2, c3 = st.columns(3)
-time_val  = c1.selectbox("Time ●", [""] + TIME_VALUES, key=f"tv_{st.session_state['form_key']}")
-work_week = c2.selectbox("Work Week", [None] + WORK_WEEK_VALUES, format_func=lambda x: "" if x is None else str(x), key=f"ww_{st.session_state['form_key']}")
-base      = c3.number_input("Base ●", value=0.0, step=0.01, format="%.2f", key=f"base_{st.session_state['form_key']}")
+time_val  = c1.selectbox("Time ●",     [""] + TIME_VALUES,                                         key=f"tv_{st.session_state['form_key']}")
+work_week = c2.selectbox("Work Week",  [None] + WORK_WEEK_VALUES, format_func=lambda x: "" if x is None else str(x), key=f"ww_{st.session_state['form_key']}")
+base      = c3.number_input("Base ●",  value=0.0, step=0.01, format="%.2f",                        key=f"base_{st.session_state['form_key']}")
 
-# ── 06 BURDEN CHIPS ───────────────────────────────────────────────────────────
+# ── 06 OPTIONAL BURDEN ────────────────────────────────────────────────────────
 st.markdown('<div class="sec-label">06 · Optional Burden — click to expand / collapse</div>', unsafe_allow_html=True)
-
-# ── BURDEN STATE SETUP ────────────────────────────────────────────────────────
-# We use TWO keys per burden column:
-#   "bv_{col_key}"        → persisted value (never wiped on collapse)
-#   "bvw_{col_key}"       → widget key (only exists when group is open)
-# On every change, on_change copies widget value → persisted value.
-# On collapse, widget disappears but persisted value remains untouched.
-
-if "grp_open" not in st.session_state:
-    st.session_state["grp_open"] = {}
 
 visible_groups = {g: cols for g, cols in BURDEN_GROUPS.items()
                   if not (g in USA_ONLY_GROUPS and not is_usa)}
 
-# Ensure persisted keys exist
 for grp, col_pairs in visible_groups.items():
     for col_key, _ in col_pairs:
         if f"bv_{col_key}" not in st.session_state:
             st.session_state[f"bv_{col_key}"] = 0.0
 
 def save_burden(col_key):
-    """Copy widget value into persisted key."""
     st.session_state[f"bv_{col_key}"] = st.session_state.get(f"bvw_{col_key}", 0.0)
 
 def get_burden(col_key):
     return st.session_state.get(f"bv_{col_key}", 0.0)
 
-# Chip row
 chip_cols = st.columns(len(visible_groups))
 for i, grp in enumerate(visible_groups):
     col_pairs = visible_groups[grp]
     is_open   = st.session_state["grp_open"].get(grp, False)
     has_data  = any(get_burden(k) != 0.0 for k, _ in col_pairs)
-    if is_open:
-        label = f"▲  {grp}"
-    elif has_data:
-        label = f"●  {grp}"
-    else:
-        label = f"+  {grp}"
+    label     = f"▲  {grp}" if is_open else (f"●  {grp}" if has_data else f"+  {grp}")
     if chip_cols[i].button(label, key=f"chip_{grp}"):
-        # Before collapsing, flush widget values → persisted values
         if is_open:
             for col_key, _ in col_pairs:
                 if f"bvw_{col_key}" in st.session_state:
@@ -441,23 +757,20 @@ for i, grp in enumerate(visible_groups):
         st.session_state["grp_open"][grp] = not is_open
         st.rerun()
 
-# Render expanded groups
 for grp, col_pairs in visible_groups.items():
     if not st.session_state["grp_open"].get(grp, False):
         continue
     st.markdown(f'<div class="group-lbl">— {grp}</div>', unsafe_allow_html=True)
     gcols = st.columns(len(col_pairs))
     for j, (col_key, col_label) in enumerate(col_pairs):
-        # Seed widget from persisted value
         if f"bvw_{col_key}" not in st.session_state:
             st.session_state[f"bvw_{col_key}"] = get_burden(col_key)
         gcols[j].number_input(
             col_label, step=0.01, format="%.2f",
             key=f"bvw_{col_key}",
             on_change=save_burden, args=(col_key,),
-            help="Negative values are valid"
+            help="Negative values are valid",
         )
-        # Keep persisted in sync on every render
         st.session_state[f"bv_{col_key}"] = st.session_state.get(f"bvw_{col_key}", get_burden(col_key))
 
 bill_rate = base + sum(get_burden(k) for k in ALL_BURDEN_KEYS)
@@ -469,7 +782,8 @@ st.markdown(f"""
 
 # ── 07 NOTE ───────────────────────────────────────────────────────────────────
 st.markdown('<div class="sec-label">07 · Note</div>', unsafe_allow_html=True)
-note = st.text_area("Note", height=80, placeholder="Any additional context...", label_visibility="collapsed", key=f"note_{st.session_state['form_key']}")
+note = st.text_area("Note", height=80, placeholder="Any additional context...",
+                    label_visibility="collapsed", key=f"note_{st.session_state['form_key']}")
 
 # ── VALIDATE ─────────────────────────────────────────────────────────────────
 def validate():
@@ -524,21 +838,21 @@ def build_row():
         "DATE":                  str(date_val),
         "BILL_RATE":             round(bill_rate, 2),
         "BASE":                  round(base, 2),
-        "FICA":   round(get_burden("FICA"), 2) if is_usa else None,
-        "FUTA":   round(get_burden("FUTA"), 2) if is_usa else None,
-        "SUTA":   round(get_burden("SUTA"), 2) if is_usa else None,
-        "WORK_COMP":       n(round(get_burden("WORK_COMP"),       2)),
-        "LIABILITY_INS":   n(round(get_burden("LIABILITY_INS"),   2)),
-        "TAX_INS":         n(round(get_burden("TAX_INS"),         2)),
-        "FRINGE_BENEFITS": n(round(get_burden("FRINGE_BENEFITS"), 2)),
-        "PER_DIEM":        n(round(get_burden("PER_DIEM"),        2)),
-        "SMALL_TOOLS":     n(round(get_burden("SMALL_TOOLS"),     2)),
-        "OT":           n(round(get_burden("OT"),           2)),
-        "OTHER_BURDEN": n(round(get_burden("OTHER_BURDEN"), 2)),
-        "G_AND_A_OH":   n(round(get_burden("G_AND_A_OH"),   2)),
-        "PROFIT":       n(round(get_burden("PROFIT"),       2)),
-        "NOTE":         note.strip().upper() if note and note.strip() else None,
-        "CONFIRMED":    confirmed,
+        "FICA":                  round(get_burden("FICA"), 2) if is_usa else None,
+        "FUTA":                  round(get_burden("FUTA"), 2) if is_usa else None,
+        "SUTA":                  round(get_burden("SUTA"), 2) if is_usa else None,
+        "WORK_COMP":             n(round(get_burden("WORK_COMP"),       2)),
+        "LIABILITY_INS":         n(round(get_burden("LIABILITY_INS"),   2)),
+        "TAX_INS":               n(round(get_burden("TAX_INS"),         2)),
+        "FRINGE_BENEFITS":       n(round(get_burden("FRINGE_BENEFITS"), 2)),
+        "PER_DIEM":              n(round(get_burden("PER_DIEM"),        2)),
+        "SMALL_TOOLS":           n(round(get_burden("SMALL_TOOLS"),     2)),
+        "OT":                    n(round(get_burden("OT"),              2)),
+        "OTHER_BURDEN":          n(round(get_burden("OTHER_BURDEN"),    2)),
+        "G_AND_A_OH":            n(round(get_burden("G_AND_A_OH"),      2)),
+        "PROFIT":                n(round(get_burden("PROFIT"),          2)),
+        "NOTE":                  note.strip().upper() if note and note.strip() else None,
+        "CONFIRMED":             confirmed,
     }
 
 # ── SUBMIT ────────────────────────────────────────────────────────────────────
@@ -551,14 +865,12 @@ if submit:
         for e in errors:
             st.error(f"✕  {e}")
     else:
-        row = build_row()
-        # Duplicate check
+        row    = build_row()
         is_dup = check_duplicate(row)
         if is_dup and not st.session_state["confirm_dup"]:
             st.session_state["pending_row"] = row
             st.warning(
-                "⚠️  A record with identical values already exists in the database "
-                "(all fields except Note and Field match). "
+                "⚠️  A record with identical values already exists. "
                 "Check the box below and click Submit again to proceed anyway."
             )
             st.session_state["confirm_dup"] = True
@@ -568,9 +880,8 @@ if submit:
             st.success("✓  Entry submitted successfully")
             st.markdown(f"**Timestamp:** `{ts}`  \n**Proof hash:** `{proof}`")
             st.session_state["receipts"].append(row)
-            # Reset burden state for next entry
             for k in ALL_BURDEN_KEYS:
-                st.session_state[f"bv_{k}"]  = 0.0
+                st.session_state[f"bv_{k}"] = 0.0
                 st.session_state.pop(f"bvw_{k}", None)
             st.session_state["grp_open"]    = {}
             st.session_state["confirm_dup"] = False
@@ -589,7 +900,7 @@ if st.session_state["confirm_dup"]:
             st.markdown(f"**Timestamp:** `{ts}`  \n**Proof hash:** `{proof}`")
             st.session_state["receipts"].append(row)
             for k in ALL_BURDEN_KEYS:
-                st.session_state[f"bv_{k}"]  = 0.0
+                st.session_state[f"bv_{k}"] = 0.0
                 st.session_state.pop(f"bvw_{k}", None)
             st.session_state["grp_open"]    = {}
             st.session_state["confirm_dup"] = False
@@ -622,6 +933,6 @@ if st.session_state["receipts"]:
         st.markdown("---")
         st.download_button(
             "⬇ Download Session Receipt", data=buf,
-            file_name=f"labor_receipt_{user_name.replace(' ','_')}_{datetime.now().strftime('%Y%m%d')}.pdf",
-            mime="application/pdf"
+            file_name=f"labor_receipt_{user_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.pdf",
+            mime="application/pdf",
         )
