@@ -313,7 +313,7 @@ if not st.session_state["session_started"]:
     </div>""", unsafe_allow_html=True)
     _, col, _ = st.columns([1, 2, 1])
     with col:
-        name_input = st.text_input("Full Name", placeholder="e.g. Ruby Ngan Ho", label_visibility="collapsed")
+        name_input = st.text_input("Full Name", placeholder="e.g. Rachel Personius", label_visibility="collapsed")
         if st.button("Start Session", use_container_width=True):
             if not name_input.strip():
                 st.error("Please enter your full name to continue.")
@@ -332,21 +332,21 @@ with st.sidebar:
     st.markdown(f"### {user_name}")
     st.caption(session_date)
     st.markdown("---")
-    st.markdown(f"*{len(st.session_state['receipts'])} submission(s) this session*")
+    st.markdown(f"**{len(st.session_state['receipts'])} submission(s) this session**")
     st.markdown("---")
     if not st.session_state["bulk_mode"]:
         st.markdown("""
-*Fields marked ● are required.*
+**Fields marked ● are required.**
 
 - Toggle USA / International at the top
 - Labor Type controls Trade Tier vs Seniority Level
-- Expand burden groups with *+* — values persist when collapsed
+- Expand burden groups with **+** — values persist when collapsed
 - Bill Rate updates automatically
 - Download session receipt below
 """)
     else:
         st.markdown("""
-*Bulk Upload Mode*
+**Bulk Upload Mode**
 
 - Upload your completed Excel template
 - Valid rows shown in white, errors in red
@@ -426,12 +426,19 @@ if bulk_mode:
         df.columns = headers
         # Drop BILL_RATE (auto-computed) and any unnamed cols
         df = df.drop(columns=[c for c in df.columns if "BILL_RATE" in c or "Unnamed" in c or "COL_" in c], errors="ignore")
-        # Uppercase all string values
+        # Uppercase all string values; convert datetime objects to YYYY-MM-DD first
         for col in df.columns:
-            df[col] = df[col].apply(
-                lambda v: str(v).strip().upper()
-                if pd.notna(v) and str(v).strip().upper() not in ("NAN","NONE","") else None
-            )
+            def normalize(v):
+                if v is None or (isinstance(v, float) and pd.isna(v)):
+                    return None
+                # Convert pandas Timestamp or datetime to YYYY-MM-DD string
+                if hasattr(v, "strftime"):
+                    return v.strftime("%Y-%m-%d")
+                s = str(v).strip()
+                if not s or s.upper() in ("NAN","NONE",""):
+                    return None
+                return s.upper()
+            df[col] = df[col].apply(normalize)
         df["_source"] = source_label
         # Drop rows where POSITION, LABOR_TYPE, and BASE are all empty
         # (locked COUNTRY/REGION/CURRENCY pre-fill all 500 rows so we must check user-filled cols)
@@ -480,37 +487,48 @@ if bulk_mode:
                 errors.append(f"{col} is required")
 
         # Fixed schema values
-        skip_conditional = set()
-        # Only validate TRADE_TIER if LABOR_TYPE=TRADE, SENIORITY_LEVEL if LABOR_TYPE=SUPERVISION
-        lt_val = row.get("LABOR_TYPE", "")
+        skip_cols = set()
+        lt_val = row.get("LABOR_TYPE", "") or ""
+
+        # Skip TRADE_TIER validation if LABOR_TYPE != TRADE (handled separately below)
+        # Skip SENIORITY_LEVEL validation if LABOR_TYPE != SUPERVISION
         if lt_val != "TRADE":
-            skip_conditional.add("TRADE_TIER")
+            skip_cols.add("TRADE_TIER")
         if lt_val != "SUPERVISION":
-            skip_conditional.add("SENIORITY_LEVEL")
+            skip_cols.add("SENIORITY_LEVEL")
+
+        # WORKER_CLASSIFICATION is USA-only — never validate for international rows
+        # WORKER_ORIGIN is international-only — never validate for USA rows
+        if src == "INTERNATIONAL":
+            skip_cols.add("WORKER_CLASSIFICATION")
+        if src == "USA":
+            skip_cols.add("WORKER_ORIGIN")
 
         for col, valid_set in VALID_VALUES.items():
-            if col in skip_conditional:
+            if col in skip_cols:
                 continue
             val = row.get(col)
             if val and str(val).strip() not in ("", "NAN", "NONE"):
                 if str(val).strip() not in valid_set:
                     errors.append(f"{col}: '{val}' not a valid value")
 
-        # TRADE/SUPERVISION logic — strict both ways
-        lt = row.get("LABOR_TYPE", "")
+        # TRADE/SUPERVISION cross-validation — strict both ways
+        lt = row.get("LABOR_TYPE", "") or ""
         tt = str(row.get("TRADE_TIER", "") or "").strip()
         sl = str(row.get("SENIORITY_LEVEL", "") or "").strip()
+        tt_filled = tt not in ("", "NAN", "NONE", "NULL")
+        sl_filled = sl not in ("", "NAN", "NONE", "NULL")
 
         if lt == "TRADE":
-            if not tt:
+            if not tt_filled:
                 errors.append("TRADE_TIER is required when LABOR_TYPE = TRADE")
-            if sl and sl not in ("", "NAN", "NONE"):
-                errors.append("SENIORITY_LEVEL should be empty when LABOR_TYPE = TRADE")
-        if lt == "SUPERVISION":
-            if not sl:
+            if sl_filled:
+                errors.append("SENIORITY_LEVEL must be empty when LABOR_TYPE = TRADE")
+        elif lt == "SUPERVISION":
+            if not sl_filled:
                 errors.append("SENIORITY_LEVEL is required when LABOR_TYPE = SUPERVISION")
-            if tt and tt not in ("", "NAN", "NONE"):
-                errors.append("TRADE_TIER should be empty when LABOR_TYPE = SUPERVISION")
+            if tt_filled:
+                errors.append("TRADE_TIER must be empty when LABOR_TYPE = SUPERVISION")
 
         # Date validation
         date_pattern = re.compile(r'^\d{4}-\d{2}-\d{2}$')
@@ -596,7 +614,7 @@ if bulk_mode:
     # ── Bulk submit ───────────────────────────────────────────────────────────
     selected_indices = [i for i, s in enumerate(st.session_state["bulk_selected"]) if s]
     st.markdown("---")
-    st.markdown(f"*{len(selected_indices)} row(s) selected for submission*")
+    st.markdown(f"**{len(selected_indices)} row(s) selected for submission**")
 
     if st.button("Submit Selected Rows", use_container_width=True, disabled=len(selected_indices) == 0):
         submitted = 0
@@ -914,7 +932,7 @@ if submit:
             with st.spinner("Submitting..."):
                 proof, ts = insert_row(row)
             st.success("✓  Entry submitted successfully")
-            st.markdown(f"*Timestamp:* {ts}  \n*Proof hash:* {proof}")
+            st.markdown(f"**Timestamp:** `{ts}`  \n**Proof hash:** `{proof}`")
             st.session_state["receipts"].append(row)
             for k in ALL_BURDEN_KEYS:
                 st.session_state[f"bv_{k}"] = 0.0
@@ -933,7 +951,7 @@ if st.session_state["confirm_dup"]:
             with st.spinner("Submitting..."):
                 proof, ts = insert_row(row)
             st.success("✓  Entry submitted successfully")
-            st.markdown(f"*Timestamp:* {ts}  \n*Proof hash:* {proof}")
+            st.markdown(f"**Timestamp:** `{ts}`  \n**Proof hash:** `{proof}`")
             st.session_state["receipts"].append(row)
             for k in ALL_BURDEN_KEYS:
                 st.session_state[f"bv_{k}"] = 0.0
@@ -968,7 +986,7 @@ if st.session_state["receipts"]:
     with st.sidebar:
         st.markdown("---")
         st.download_button(
-            "⬇️ Download Session Receipt", data=buf,
-            file_name=f"labor_receipt_{user_name.replace(' ', '')}{datetime.now().strftime('%Y%m%d')}.pdf",
+            "⬇ Download Session Receipt", data=buf,
+            file_name=f"labor_receipt_{user_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.pdf",
             mime="application/pdf",
         )
