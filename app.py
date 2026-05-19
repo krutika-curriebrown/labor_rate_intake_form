@@ -313,7 +313,7 @@ if not st.session_state["session_started"]:
     </div>""", unsafe_allow_html=True)
     _, col, _ = st.columns([1, 2, 1])
     with col:
-        name_input = st.text_input("Full Name", placeholder="e.g. Rachel Personius", label_visibility="collapsed")
+        name_input = st.text_input("Full Name", placeholder="e.g. Ruby Ngan Ho", label_visibility="collapsed")
         if st.button("Start Session", use_container_width=True):
             if not name_input.strip():
                 st.error("Please enter your full name to continue.")
@@ -431,24 +431,29 @@ if bulk_mode:
             def normalize(v):
                 if v is None or (isinstance(v, float) and pd.isna(v)):
                     return None
-                # Convert pandas Timestamp or datetime to YYYY-MM-DD string
+                # Convert pandas Timestamp or datetime object to YYYY-MM-DD string
                 if hasattr(v, "strftime"):
                     return v.strftime("%Y-%m-%d")
                 s = str(v).strip()
                 if not s or s.upper() in ("NAN","NONE",""):
                     return None
+                # Strip time component from datetime strings like "2020-01-01 00:00:00"
+                if len(s) > 10 and s[4:5] == "-" and s[7:8] == "-":
+                    s = s[:10]
                 return s.upper()
             df[col] = df[col].apply(normalize)
         df["_source"] = source_label
         # Drop rows where POSITION, LABOR_TYPE, and BASE are all empty
         # (locked COUNTRY/REGION/CURRENCY pre-fill all 500 rows so we must check user-filled cols)
         def is_truly_empty(r):
-            pos  = str(r.get("POSITION",  "")).strip()
-            lt   = str(r.get("LABOR_TYPE","")).strip()
-            base = str(r.get("BASE",      "")).strip()
-            pos_empty  = pos  in ("","NONE","NAN","NONE")
-            lt_empty   = lt   in ("","NONE","NAN","NONE")
-            base_empty = base in ("","NONE","NAN","0.0","0","NONE")
+            # After normalize, empty cells are Python None → str(None) = "None"
+            # Must uppercase before checking
+            pos  = str(r.get("POSITION",  "") or "").strip().upper()
+            lt   = str(r.get("LABOR_TYPE","") or "").strip().upper()
+            base = str(r.get("BASE",      "") or "").strip().upper()
+            pos_empty  = pos  in ("","NONE","NAN")
+            lt_empty   = lt   in ("","NONE","NAN")
+            base_empty = base in ("","NONE","NAN","0.0","0")
             return pos_empty and lt_empty and base_empty
         df = df[~df.apply(is_truly_empty, axis=1)].reset_index(drop=True)
         return df
