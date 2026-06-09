@@ -45,7 +45,7 @@ POSITION_VALUES = sorted([
 TRADE_TIER_VALUES = [
     "1-GENERAL FOREMAN","2-FOREMAN","3-JOURNEYMAN","4-APPRENTICE",
     "HELPER","PRE-APPRENTICE","MASTER","CE1","CE2","CE3",
-    "CW1","CW2","CW3","CW4","I","II","III","IV","V","VI","VII","VIII",
+    "CW1","CW2","CW3","CW4",
     "CREW","ADMINISTRATIVE",
 ]
 SENIORITY_VALUES = sorted([
@@ -55,6 +55,7 @@ SENIORITY_VALUES = sorted([
     "REGIONAL","REGIONAL MANAGER","SENIOR","SENIOR ASSOCIATE","SENIOR MANAGER",
     "SENIOR PRINCIPAL","SENIOR SPECIALIST","SENIOR SUPERVISOR",
     "SENIOR VICE PRESIDENT","SPECIALIST","SUPERVISOR","UNKNOWN","VICE PRESIDENT",
+    "I","II","III","IV","V","VI","VII","VIII",
 ])
 WORKER_ORIGIN_VALUES  = ["LOCAL","INTERNATIONAL","TRAVELER"]
 FIELD_SUGGESTIONS = sorted(list(set([
@@ -474,6 +475,14 @@ if bulk_mode:
 
     df = pd.concat(frames, ignore_index=True)
 
+    # ── Within-file deduplication ─────────────────────────────────────────────
+    dedup_cols = [c for c in df.columns if c != "_source"]
+    before_dedup = len(df)
+    df = df.drop_duplicates(subset=dedup_cols).reset_index(drop=True)
+    within_file_dups = before_dedup - len(df)
+    if within_file_dups:
+        st.info(f"ℹ️  {within_file_dups} duplicate row(s) within the uploaded file were removed before preview.")
+
     # ── Validate each row ─────────────────────────────────────────────────────
     def validate_bulk_row(row):
         errors = []
@@ -623,6 +632,7 @@ if bulk_mode:
 
     if st.button("Submit Selected Rows", use_container_width=True, disabled=len(selected_indices) == 0):
         submitted = 0
+        skipped_dups = []
         submit_errors = []
 
         for i in selected_indices:
@@ -687,6 +697,10 @@ if bulk_mode:
                 "CONFIRMED":             g("CONFIRMED"),
             }
 
+            if check_duplicate(bulk_row):
+                skipped_dups.append(i + 1)
+                continue
+
             try:
                 insert_row(bulk_row)
                 submitted += 1
@@ -696,6 +710,11 @@ if bulk_mode:
 
         if submitted:
             st.success(f"✓  {submitted} row(s) submitted successfully")
+        if skipped_dups:
+            st.warning(
+                f"⚠️  {len(skipped_dups)} row(s) skipped — identical records already exist in the database "
+                f"(row{'s' if len(skipped_dups) != 1 else ''}: {', '.join(str(r) for r in skipped_dups)})"
+            )
         for err in submit_errors:
             st.error(err)
         st.session_state["bulk_selected"] = [False] * len(df)
