@@ -653,7 +653,7 @@ if bulk_mode:
             bill = sum(gn(c) or 0.0 for c in burden_cols)
 
             bulk_row = {
-                "SOURCE":                src,
+                "SOURCE":                "US" if src == "USA" else "INTERNATIONAL",
                 "SUBMITTED_BY":          user_name,
                 "POSITION":              g("POSITION"),
                 "LABOR_TYPE":            g("LABOR_TYPE"),
@@ -889,7 +889,7 @@ def validate():
 def build_row():
     def n(v): return None if v == 0.0 else v
     return {
-        "SOURCE":                "USA" if is_usa else "INTERNATIONAL",
+        "SOURCE":                "US" if is_usa else "INTERNATIONAL",
         "SUBMITTED_BY":          user_name,
         "POSITION":              position,
         "LABOR_TYPE":            labor_type,
