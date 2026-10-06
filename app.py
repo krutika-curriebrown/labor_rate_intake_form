@@ -544,6 +544,33 @@ if bulk_mode:
             if tt_filled:
                 errors.append("TRADE_TIER must be empty when LABOR_TYPE = SUPERVISION")
 
+        # STATE must be a valid US state code for USA rows
+        st_val = str(row.get("STATE", "") or "").strip()
+        if src == "USA" and st_val not in ("", "NAN", "NONE") and st_val not in US_STATES:
+            errors.append(f"STATE: '{st_val}' not a valid value")
+
+        # WORK_WEEK must be one of the fixed values
+        ww = str(row.get("WORK_WEEK", "") or "").strip()
+        if ww not in ("", "NAN", "NONE"):
+            try:
+                ww_num = float(ww)
+                if not ww_num.is_integer() or int(ww_num) not in WORK_WEEK_VALUES:
+                    errors.append(f"WORK_WEEK: '{ww}' not a valid value")
+            except ValueError:
+                errors.append(f"WORK_WEEK: '{ww}' not a valid value")
+
+        # BASE and burden columns must be numbers; BASE cannot be zero
+        for num_col in ["BASE"] + ALL_BURDEN_KEYS:
+            nval = str(row.get(num_col, "") or "").strip()
+            if nval in ("", "NAN", "NONE"):
+                continue
+            try:
+                n = float(nval)
+                if num_col == "BASE" and n == 0:
+                    errors.append("BASE cannot be zero")
+            except ValueError:
+                errors.append(f"{num_col}: '{nval}' is not a number")
+
         # Date validation
         date_pattern = re.compile(r'^\d{4}-\d{2}-\d{2}$')
         for date_col in ("DATE", "START_DATE", "END_DATE"):
@@ -933,9 +960,29 @@ def build_row():
         "CONFIRMED":             confirmed,
     }
 
+def next_entry(ts, proof):
+    """After a successful submit: clear the whole form, or only dates/rates if 'keep details' is ticked."""
+    if st.session_state.get("keep_details"):
+        fk = st.session_state["form_key"]
+        for prefix in ("dv", "sd", "ed", "base"):
+            st.session_state.pop(f"{prefix}_{fk}", None)
+    else:
+        st.session_state["form_key"] += 1
+    st.session_state["last_submit"] = (ts, proof)
+
 # ── SUBMIT ────────────────────────────────────────────────────────────────────
 st.markdown("---")
+st.checkbox(
+    "Keep details for next entry — clears only Date, Start/End Date, Base and burden",
+    key="keep_details",
+    help="Tick when entering several rates for the same project, e.g. one role's rate for each year.",
+)
 submit = st.button("Submit Entry", use_container_width=True)
+
+if st.session_state.get("last_submit"):
+    ts, proof = st.session_state.pop("last_submit")
+    st.success("✓  Entry submitted successfully")
+    st.markdown(f"**Timestamp:** `{ts}`  \n**Proof hash:** `{proof}`")
 
 if submit:
     errors = validate()
@@ -945,18 +992,16 @@ if submit:
     else:
         row    = build_row()
         is_dup = check_duplicate(row)
-        if is_dup and not st.session_state["confirm_dup"]:
+        if is_dup:
             st.session_state["pending_row"] = row
             st.warning(
                 "⚠️  A record with identical values already exists. "
-                "Check the box below and click Submit again to proceed anyway."
+                "Check the box below and click Confirm & Submit to proceed anyway."
             )
             st.session_state["confirm_dup"] = True
         else:
             with st.spinner("Submitting..."):
                 proof, ts = insert_row(row)
-            st.success("✓  Entry submitted successfully")
-            st.markdown(f"**Timestamp:** `{ts}`  \n**Proof hash:** `{proof}`")
             st.session_state["receipts"].append(row)
             for k in ALL_BURDEN_KEYS:
                 st.session_state[f"bv_{k}"] = 0.0
@@ -964,7 +1009,7 @@ if submit:
             st.session_state["grp_open"]    = {}
             st.session_state["confirm_dup"] = False
             st.session_state["pending_row"] = None
-            st.session_state["form_key"]   += 1
+            next_entry(ts, proof)
             st.rerun()
 
 if st.session_state["confirm_dup"]:
@@ -974,8 +1019,6 @@ if st.session_state["confirm_dup"]:
         if st.button("Confirm & Submit", use_container_width=True):
             with st.spinner("Submitting..."):
                 proof, ts = insert_row(row)
-            st.success("✓  Entry submitted successfully")
-            st.markdown(f"**Timestamp:** `{ts}`  \n**Proof hash:** `{proof}`")
             st.session_state["receipts"].append(row)
             for k in ALL_BURDEN_KEYS:
                 st.session_state[f"bv_{k}"] = 0.0
@@ -983,7 +1026,7 @@ if st.session_state["confirm_dup"]:
             st.session_state["grp_open"]    = {}
             st.session_state["confirm_dup"] = False
             st.session_state["pending_row"] = None
-            st.session_state["form_key"]   += 1
+            next_entry(ts, proof)
             st.rerun()
 
 # ── SESSION RECEIPT ───────────────────────────────────────────────────────────
