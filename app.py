@@ -752,6 +752,13 @@ if bulk_mode:
 # SINGLE ENTRY FORM
 # ══════════════════════════════════════════════════════════════════════════════
 
+# "Keep details" submit: blank dates and base before their widgets are drawn
+if st.session_state.pop("clear_rates", False):
+    _fk = st.session_state["form_key"]
+    for _prefix in ("dv", "sd", "ed"):
+        st.session_state[f"{_prefix}_{_fk}"] = None
+    st.session_state[f"base_{_fk}"] = 0.0
+
 # ── 01 CLASSIFICATION ─────────────────────────────────────────────────────────
 st.markdown('<div class="sec-label">01 · Classification</div>', unsafe_allow_html=True)
 
@@ -963,9 +970,8 @@ def build_row():
 def next_entry(ts, proof):
     """After a successful submit: clear the whole form, or only dates/rates if 'keep details' is ticked."""
     if st.session_state.get("keep_details"):
-        fk = st.session_state["form_key"]
-        for prefix in ("dv", "sd", "ed", "base"):
-            st.session_state.pop(f"{prefix}_{fk}", None)
+        # Widgets are already drawn this run, so flag the reset for the top of the next run
+        st.session_state["clear_rates"] = True
     else:
         st.session_state["form_key"] += 1
     st.session_state["last_submit"] = (ts, proof)
